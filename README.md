@@ -29,6 +29,19 @@ Check out this video: <https://youtu.be/vCrqtjIsVMY>. The first 30 seconds show 
 - 8 channel bi-directional logic level converter (Google "HW-0108")
 - Reed Switch Sensor Magnetic (and magnet)
 
+## Images
+
+Wiring phase:
+
+![Wiring 1, GND](Images/Wiring-1.jpeg)
+![Wiring 2, +5v](Images/Wiring-2.jpeg)
+![Wiring 3, +3.3v](Images/Wiring-3.jpeg)
+![Soldering esp32, details](Images/Soldering-esp32-1.jpeg)
+![Soldering esp32, details](Images/Soldering-esp32-2.jpeg)
+![Soldering esp32, details](Images/Soldering-esp32-3.jpeg)
+![Final, open](Images/Final-3.jpeg)
+![Final, closed](Images/Final-2.jpeg)
+
 ## Schematics
 
 TODO
