@@ -27,6 +27,7 @@ Check out this video: <https://youtu.be/vCrqtjIsVMY>. The first 30 seconds show 
 - Voltage regulator to 3.3v - (used to power the ESP32 with an external 5v power supply)
 - Active buzzer (alarm - Google "MH-FMD")
 - 8 channel bi-directional logic level converter (Google "HW-0108")
+- Reed Switch Sensor Magnetic (and magnet)
 
 ## Schematics
 
