@@ -48,7 +48,12 @@ TODO
 
 ## Case stl for 3d printing
 
-TODO
+Files in the 3d-printing folder corresponds with the enclosing case. I'm using 4 cilynder 5x3 mm magnets to secure the case closed while allowing me to open it when needed.
+
+Check out the following files:
+
+- 3d-printing/Nevera-case-bottom.stl
+- 3d-printing/Nevera-case-top.stl
 
 ## Prerequisites
 
