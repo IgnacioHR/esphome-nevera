@@ -1,0 +1,260 @@
+# This file is copyright Ignacio Hernández-Ros ignacio@hernandez-ros.com all rights are reserved
+# You cannot earn money based on this work and cannot transfer it to anyone that might earn money
+# based on this work.
+# You can't sell this code. You can't produce the device described for commercial purposes
+#
+# esphome-nevera is a decive with a sensor that detects when the fridge door has been opened
+# Once it is opened:
+#   If the last time it was closed is less than 30 seconds, the alarm is turn ON
+#   regardeless of the alarm status, the display shows an icon representing "door open"
+# When the door is closed:
+#   If the alarm was ON, turn it OFF
+#   Start a counter down for 30 seconds to detect if it is opened too early
+#   The display shows full white and every 30/64 milliseconds a led is turned down (randomly)
+# When the count down ends, the fridge door can be safely opened again
+#
+# The implementation is based on the following devices:
+#   SPI to communicate with the MAX7219
+#   BinarySensor based on an incoming pin (the contact is magnetic)
+#   Template Binary sensor to publish the state of the internal counter (like a tampering device)
+#   Switch (internal) to turn the alarm on-off
+#
+#
+#  IMPLEMENTATION NOTES:
+#   - I've been extremely careful to avoid interferences between the display and the sensors.
+#     Means there are no calls to update the display when the sensor changes. It is the
+#     Lambda that render the display who takes care of the status.
+#   - The code inside the lambda has been simplified a lot. On every "frame" the entire device
+#     Matrix is transferred from the internal 8x8 bits representation to the data model of the
+#     surrounding display.
+#   - The display is turned "off" when the count down ends. And it is turned "on" when
+#     the door has been opened.
+#   - There must be a bug in the SPI, Display or binary sensor code that is weird. When the
+#     door is closed, sometimes (not always) the display goes black. Internally the whole
+#     count down process continues to run. If the door is opened, the alarm turns on, etc.
+#     but there is no white representation and no leds are turned off (visually)
+#   - Sometimes (randomly) when the fridge door is opened, the intensity is no longer level 15
+#   - Sometimes (randomly) the lines are displaced one bit (right) or turned reverse color from a
+#     specific led in the line.
+#   - It looks like the BinarySensor based on GPIO might interrupt the Display routine (and the
+#     SPI transfer) and this causes weird situations?
+#
+#
+# Connections and pin assignments
+#
+# ESP32 GND    -> 1  -> MAX7219 GND
+# ESP32 V3.3v  -> 2  -> MAX7219 VCC
+# ESP32 V3.3v  -> 3  -> MAX7219 VCC En (chip enabled)
+# ESP32 GPIO32 -> 8  -> Door open sensor IN White
+# ESP32 GPIO33 -> 9  -> MAX7219 CS OUT Yellow
+# ESP32 GPIO25 -> 10 -> MAX7219 CLK OUT Blue
+# ESP32 GPIO27 -> 12 -> MAX7219 DIN OUT Green
+# ESP32 GPIO14 -> 13 -> Sound Alarm OUT Grey
+
+esphome:
+  name: nevera
+  on_boot:
+    priority: 600
+    then:
+      - binary_sensor.template.publish:
+          id: sensor_recien_cerrada
+          state: OFF
+      - binary_sensor.template.publish:
+          id: sensor_alarma
+          state: OFF
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  #level: VERBOSE
+  level: INFO
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "GenerateMe" # Visit https://esphome.io/components/api.html go down to "key" and copy the generated value
+
+ota:
+  password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  domain: !secret wifi_domain # maybe you don't need this
+
+  # Enable fallback hotspot in case wifi connection fails
+  ap:
+    ssid: "Nevera Fallback Hotspot"
+    password: !secret captive_password
+
+# captive_portal: # disable when using idf framework
+
+#external_components: # enable if custom components are required
+#  - source: components
+
+switch:
+  - platform: gpio
+    internal: true
+    pin:
+      number: GPIO14
+      mode:
+        output: true
+    id: out_alarma
+    inverted: true
+
+binary_sensor:
+  - platform: gpio
+    id: sensor_puerta
+    name: "Sensor Puerta Nevera"
+    device_class: door
+    filters:
+      delayed_on_off: 50 ms
+    pin:
+      number: GPIO32
+      mode:
+        input: true
+        pullup: true
+    on_press: # la puerta se abre
+      then:
+        - if:
+            condition:
+              - binary_sensor.is_on: sensor_recien_cerrada
+            then:
+              - binary_sensor.template.publish:
+                  id: sensor_alarma
+                  state: ON
+              - binary_sensor.template.publish:
+                  id: sensor_recien_cerrada
+                  state: OFF
+    on_release: # la puerta se cierra
+      then:
+        - if:
+            condition:
+              - binary_sensor.is_on: sensor_alarma
+            then:
+              - binary_sensor.template.publish:
+                  id: sensor_alarma
+                  state: OFF
+        - binary_sensor.template.publish:
+            id: sensor_recien_cerrada
+            state: ON
+  - platform: template
+    id: sensor_recien_cerrada
+    name: "Puerta Recién Cerrada"
+    device_class: safety
+  - platform: template
+    id: sensor_alarma
+    name: "Alarma Puerta Abierta"
+    device_class: sound
+    on_press:
+      then:
+        - switch.turn_on: out_alarma
+    on_release:
+      then:
+        - switch.turn_off: out_alarma
+
+spi:
+  id: spi0
+  clk_pin: GPIO25
+  mosi_pin: GPIO27
+
+display:
+  - platform: max7219digit
+    id: display0
+    spi_id: spi0
+    cs_pin: GPIO33
+    num_chips: 1
+    intensity: 8
+    rotate_chip: 90
+    scroll_enable: false
+    update_interval: 469ms # cada tic, quitar un punto encendido
+    lambda: |-
+      static uint8_t heartBits[] = {1, 2, 11, 12, 5, 6, 15, 23, 31, 38, 45, 52, 51, 42, 33, 24, 16, 8};
+      static uint8_t matrix[] = {0,0,0,0,0,0,0,0};
+      static int maxRand = -1;
+      static bool dispOnOff = false;
+      if (maxRand == -1) {
+        maxRand = 64;
+        dispOnOff = false;
+        for (int row = 0; row < 8; row++) {
+          matrix[row] = 0x00;
+        }
+        ESP_LOGD("display", "Display OFF");
+        it.turn_on_off(false);
+        id(sensor_recien_cerrada).publish_state(false);
+        return;
+      }
+      if (id(sensor_puerta).state) { /* se ha abierto la puerta */
+        maxRand = 64;
+        matrix[7] = (uint8_t)0x18;
+        matrix[6] = (uint8_t)0x7c;
+        matrix[5] = (uint8_t)0x5e;
+        matrix[4] = (uint8_t)0x5e;
+        matrix[3] = (uint8_t)0x5e;
+        matrix[2] = (uint8_t)0x5e;
+        matrix[1] = (uint8_t)0x4e;
+        matrix[0] = (uint8_t)0x7e;
+        if (!dispOnOff) {
+          dispOnOff = true;
+          ESP_LOGD("display", "Display ON");
+          it.turn_on_off(true);
+        }
+      } else if (dispOnOff) { /* comienza o continúa la cuenta atrás */
+        if (maxRand == 64) {
+          ESP_LOGD("display", "Matrix initialized all ON");
+          it.turn_on_off(true);
+          for (int row = 0; row < 8; row++) {
+            matrix[row] = (uint8_t)0xFF;
+          }
+        } else {
+          if (maxRand > 17) {
+            uint8_t rowB;
+            int randCol;
+            int randRow;
+            bool searchAgain;
+            do {
+              searchAgain = false;
+              randRow = random_uint32() % 8;
+              rowB = matrix[randRow];
+              randCol = random_uint32() % 8;
+              if ((rowB >> randCol) & 0x1) {
+                int randBit = randRow * 8 + randCol;
+                for (int idx = 0; !searchAgain && idx < 18; ++idx) {
+                  if (randBit == heartBits[idx])
+                    searchAgain = true;
+                }
+              } else {
+                searchAgain = true;
+              }
+            } while (searchAgain);
+            rowB &= ~(1UL << randCol);
+            matrix[randRow] = rowB;
+          } else {
+            uint8_t nextLed = heartBits[17 - maxRand];
+            int row = nextLed / 8;
+            uint8_t rowB = matrix[row];
+            int col = nextLed % 8;
+            rowB &= ~(1UL << col);
+            matrix[row] = rowB;
+          }
+        }
+        maxRand -= 1;
+      }
+      if (dispOnOff) {
+        for (int row = 0; row < 8; row++) {
+          uint8_t rowB = matrix[row];
+
+          for (int col = 0; col < 8; col++) {
+            if ((rowB >> col) & 0x01) {
+              it.draw_pixel_at(row, col, COLOR_ON);
+            } else {
+              it.draw_pixel_at(row, col, COLOR_OFF);
+            }
+          }
+        }
+      }
+
